@@ -20,13 +20,13 @@ export function PrivacyAndTermsPage() {
           <SectionTitle>Company Information</SectionTitle>
           <Paragraph>
             reddit_claw<br />
-            [INSERT LEGAL COMPANY NAME]
+            Literary Machines
             <br />
-            [INSERT COMPANY ADDRESS]
+            2099 Philadelphia Pike #9861
             <br />
-            [INSERT CITY, STATE, ZIP]
+            Claymont
             <br />
-            [INSERT COUNTRY]
+            19703, US
           </Paragraph>
           <SectionTitle>Contact</SectionTitle>
           <Paragraph>support@reddit_claw.com</Paragraph>
@@ -41,24 +41,32 @@ export function PrivacyAndTermsPage() {
             subscriptions or payments, and automatically collected usage data for
             improving product reliability.
           </Paragraph>
-          <SectionHeading>1.2 How We Use Information</SectionHeading>
+          <SectionHeading>1.2 Zero Personal Data Policy</SectionHeading>
+          <Paragraph>
+            We do not collect, store, or sell your Reddit browsing data, AI
+            prompts, extension activity logs, or browser content for our own
+            analysis. Our service acts as a direct bridge between OpenClaw and
+            your browser extension. That means we do not build profiles or keep
+            long-term records of your personal use data in our systems.
+          </Paragraph>
+          <SectionHeading>1.3 How We Use Information</SectionHeading>
           <Paragraph>
             We use data to deliver and secure the service, process purchases, send
             transactional updates, improve product quality, and comply with legal
             obligations.
           </Paragraph>
-          <SectionHeading>1.3 Third Parties</SectionHeading>
+          <SectionHeading>1.4 Third Parties</SectionHeading>
           <Paragraph>
             We may share limited data with service providers that support hosting,
             payment processing, analytics, and customer support. These providers
             process data on our behalf and are contractually required to protect it.
           </Paragraph>
-          <SectionHeading>1.4 Data Retention</SectionHeading>
+          <SectionHeading>1.5 Data Retention</SectionHeading>
           <Paragraph>
             We retain personal data only as long as necessary for the purposes
             described above, for legal compliance, and for resolving disputes.
           </Paragraph>
-          <SectionHeading>1.5 Your Rights</SectionHeading>
+          <SectionHeading>1.6 Your Rights</SectionHeading>
           <Paragraph>
             Depending on your location, you may have rights to access, update,
             delete, or restrict use of your personal data. You may also request
