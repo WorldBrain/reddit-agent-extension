@@ -1,0 +1,40 @@
+{
+  "name": "openclaw-reddit-agent-server",
+  "version": "2026.2.152",
+  "description": "OpenClaw plugin for Reddit automation via Chrome extension bridge",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "~5.8.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "reddit",
+    "automation"
+  ],
+  "license": "MIT"
+}

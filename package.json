@@ -1,0 +1,19 @@
+{
+  "name": "openclaw-reddit-agent",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:extension": "NODE_ENV=development npm run dev -w packages/extension",
+    "dev:server": "NODE_ENV=development npm run dev -w packages/server",
+    "dev:website": "NODE_ENV=development npm run dev -w packages/website",
+    "build:extension": "npm run build -w packages/extension",
+    "build:server": "npm run build -w packages/server",
+    "build:website": "npm run build -w packages/website",
+    "build": "npm run build:extension && npm run build:server && npm run build:website",
+    "package:extension": "npm run package -w packages/extension",
+    "package": "npm run package:extension"
+  },
+  "description": "Monorepo for the OpenClaw Reddit Agent extension, bridge server, and setup website."
+}

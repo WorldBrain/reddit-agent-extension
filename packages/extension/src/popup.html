@@ -1,0 +1,351 @@
+<!doctype html>
+<html>
+  <head>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        width: 320px;
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #f3f4f6;
+        color: #111827;
+        font-size: 13px;
+        /* Pattern grid */
+        background-image:
+          linear-gradient(rgba(229, 231, 235, 0.3) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(229, 231, 235, 0.3) 1px, transparent 1px);
+        background-size: 20px 20px;
+      }
+
+      /* Tab bar */
+      .tab-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px 0;
+        background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .traffic-lights {
+        display: flex;
+        gap: 5px;
+        flex-shrink: 0;
+      }
+      .traffic-lights span {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+      .traffic-lights .red { background: #ff5f57; }
+      .traffic-lights .yellow { background: #febc2e; }
+      .traffic-lights .green { background: #28c840; }
+      .tab {
+        padding: 6px 12px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #111827;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-bottom: 1px solid #ffffff;
+        border-radius: 6px 6px 0 0;
+        position: relative;
+        bottom: -1px;
+        font-family: "Inter", sans-serif;
+      }
+
+      .popup-body {
+        padding: 14px;
+      }
+
+      /* Status panel */
+      .status-panel {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        margin-bottom: 4px;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
+      }
+      .status-panel .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .status-panel.connected {
+        border-color: #06B6D4;
+        background: rgba(6, 182, 212, 0.06);
+        color: #0891b2;
+      }
+      .status-panel.connected .dot {
+        background: #06B6D4;
+        box-shadow: 0 0 6px rgba(6, 182, 212, 0.4);
+      }
+      .status-panel.disconnected {
+        border-color: #e5e7eb;
+        color: #9ca3af;
+      }
+      .status-panel.disconnected .dot {
+        background: #d1d5db;
+      }
+
+      .connected-url {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: #9ca3af;
+        margin-bottom: 12px;
+        padding: 0 2px;
+        word-break: break-all;
+      }
+
+      /* Sections */
+      .section {
+        margin-bottom: 12px;
+      }
+      .section label {
+        display: block;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+        color: #9ca3af;
+      }
+      .section .hint {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: #d1d5db;
+        margin-top: 4px;
+      }
+
+      /* Input row */
+      .input-row {
+        display: flex;
+        gap: 6px;
+      }
+      .input-row input {
+        flex: 1;
+        padding: 7px 10px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: #111827;
+        background: #ffffff;
+        transition: border-color 0.15s ease;
+      }
+      .input-row input:focus {
+        outline: none;
+        border-color: #06B6D4;
+        box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.08);
+      }
+      .input-row input::placeholder {
+        color: #d1d5db;
+      }
+
+      /* Buttons */
+      button {
+        font-family: "Inter", sans-serif;
+        cursor: pointer;
+        border: none;
+        transition: all 0.15s ease;
+      }
+      button.primary {
+        padding: 7px 14px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        background: #06B6D4;
+        color: white;
+      }
+      button.primary:hover {
+        background: #0891b2;
+        transform: translateY(-1px);
+      }
+      button.primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+      button.secondary {
+        width: 100%;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        background: #ffffff;
+        color: #6b7280;
+        border: 1px solid #e5e7eb;
+      }
+      button.secondary:hover {
+        border-color: #06B6D4;
+        color: #06B6D4;
+        background: rgba(6, 182, 212, 0.04);
+      }
+      button.danger {
+        background: none;
+        color: #9ca3af;
+        font-size: 10px;
+        font-family: "JetBrains Mono", monospace;
+        padding: 4px 0;
+      }
+      button.danger:hover {
+        color: #ef4444;
+      }
+
+      /* Paired host display */
+      .paired-host {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 7px 10px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: #06B6D4;
+        overflow-x: auto;
+      }
+      .paired-host span {
+        white-space: nowrap;
+      }
+
+      /* License status */
+      #license-status.valid {
+        color: #06B6D4;
+      }
+      #license-status.invalid {
+        color: #ef4444;
+      }
+      #license-status.checking {
+        color: #9ca3af;
+      }
+
+      /* Help button */
+      .help-btn {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        background: rgba(6, 182, 212, 0.08);
+        color: #06B6D4;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        font-weight: 600;
+        border: 1px solid rgba(6, 182, 212, 0.15);
+      }
+      .help-btn:hover {
+        background: rgba(6, 182, 212, 0.15);
+      }
+
+      /* Divider */
+      .divider {
+        height: 1px;
+        background: #e5e7eb;
+        margin: 12px 0;
+      }
+
+      /* Header */
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      .header h1 {
+        font-size: 13px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #111827;
+      }
+      .header h1 .logo {
+        width: 16px;
+        height: 16px;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Browser tab bar -->
+    <div class="tab-bar">
+      <div class="traffic-lights">
+        <span class="red"></span>
+        <span class="yellow"></span>
+        <span class="green"></span>
+      </div>
+      <div class="tab">reddit_claw</div>
+    </div>
+
+    <div class="popup-body">
+      <div class="header">
+        <h1>
+          <img class="logo" src="./logo.svg" alt="" />
+          reddit_claw
+        </h1>
+        <button id="btn-help" class="help-btn" title="Setup guide">?</button>
+      </div>
+
+      <div id="status" class="status-panel disconnected">
+        <span class="dot"></span>
+        <span id="status-text">Disconnected</span>
+      </div>
+      <div id="connected-url" class="connected-url"></div>
+
+      <div class="section">
+        <label>WebSocket Server URL</label>
+        <div id="pair-input" class="input-row">
+          <input
+            id="server-url"
+            type="text"
+            placeholder="ws://192.168.1.10:7071/ws"
+          />
+          <button id="btn-pair" class="primary">Save</button>
+        </div>
+        <div id="pair-display" class="paired-host" style="display: none">
+          <span id="paired-host-text"></span>
+          <button id="btn-unpair" class="danger">remove</button>
+        </div>
+        <div class="hint">Full WebSocket URL of the agent server</div>
+      </div>
+
+      <div class="section" id="license-section">
+        <label>License Key</label>
+        <div id="license-input" class="input-row">
+          <input
+            id="license-key"
+            type="text"
+            placeholder="Enter your license key"
+          />
+          <button id="btn-save-license" class="primary">Save</button>
+        </div>
+        <div id="license-display" class="paired-host" style="display: none">
+          <span id="license-key-text"></span>
+          <button id="btn-remove-license" class="danger">remove</button>
+        </div>
+        <div id="license-status" class="hint"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <button id="btn-retry" class="secondary">Retry Connection</button>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

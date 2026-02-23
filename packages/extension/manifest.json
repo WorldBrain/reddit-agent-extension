@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Reddit Agent Extension",
+  "version": "1.0.0",
+  "description": "Connects Reddit browsing and replies to your local AI agent through a secure WebSocket bridge.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "scripting",
+    "tabs",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://api.lemonsqueezy.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Reddit Agent"
+  }
+}

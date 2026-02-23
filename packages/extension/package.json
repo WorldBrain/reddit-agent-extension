@@ -1,0 +1,16 @@
+{
+  "name": "reddit-agent-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension that lets local AI agents search Reddit, read posts, and publish replies via OpenClaw.",
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "vite build",
+    "package": "vite build && zip -r ../../extension.zip dist",
+    "watch": "vite build --watch --mode development"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.28",
+    "vite": "^5.4.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "openclaw-reddit-agent-server",
+  "name": "OpenClaw Reddit Agent Server",
+  "description": "Bridge to Reddit Chrome extension for browsing, searching, and commenting on Reddit.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535,
+        "default": 7071
+      }
+    }
+  },
+  "uiHints": {
+    "port": {
+      "label": "WebSocket Port",
+      "placeholder": "7071",
+      "help": "Port for the WebSocket bridge server. The Chrome extension connects here."
+    }
+  },
+  "skills": ["skills/openclaw-reddit-agent-server"]
+}
