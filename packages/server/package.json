@@ -1,6 +1,6 @@
 {
   "name": "openclaw-reddit-agent-server",
-  "version": "2026.2.152",
+  "version": "2026.2.2802",
   "description": "OpenClaw plugin for Reddit automation via Chrome extension bridge",
   "type": "module",
   "main": "dist/index.js",

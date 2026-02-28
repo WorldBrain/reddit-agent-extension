@@ -12,11 +12,43 @@ import {
 // =============================================
 
 let ws = null;
-let connectionStatus = "disconnected"; // 'connected' | 'disconnected'
+let connectionStatus = "disconnected"; // 'connected' | 'disconnected' | 'pairing'
 let connectedUrl = null;
 let isConnecting = false;
 let reconnectTimer = null;
 let keepAliveIntervalId = null;
+let bridgeIdentifyTimer = null;
+let activeProtocol = null; // 'bridge' | 'gateway' | null
+let pendingGatewayConnectId = null;
+let pendingGatewayNonce = null;
+let gatewayConnectVersion = "v2";
+let gatewayLegacyFallbackTried = false;
+
+const DEFAULT_BRIDGE_PORT = "7071";
+const DEFAULT_GATEWAY_PORT = "18789";
+const BRIDGE_IDENTIFY_DELAY_MS = 750;
+const GATEWAY_PROTOCOL_VERSION = 3;
+const GATEWAY_CLIENT_ID = "cli";
+const GATEWAY_CLIENT_MODE = "ui";
+const GATEWAY_CLIENT_PLATFORM = "browser";
+const GATEWAY_CLIENT_VERSION = "0.1.0";
+const GATEWAY_SCOPES = ["operator.admin", "operator.read", "operator.write"];
+
+const BRIDGE_DEVICE_ID_STORAGE_KEY = "bridgeDeviceId";
+const BRIDGE_AUTH_TOKEN_STORAGE_KEY = "bridgeAuthToken";
+const GATEWAY_DEVICE_ID_STORAGE_KEY = "gatewayDeviceId";
+const GATEWAY_PRIVATE_KEY_STORAGE_KEY = "gatewayPrivateKeyPkcs8";
+const GATEWAY_PUBLIC_KEY_STORAGE_KEY = "gatewayPublicKeyRaw";
+const GATEWAY_DEVICE_TOKEN_STORAGE_KEY = "gatewayDeviceToken";
+const GATEWAY_AUTH_TOKEN_STORAGE_KEY = "gatewayAuthToken";
+
+const ALLOWED_REDDIT_HOSTS = new Set([
+  "www.reddit.com",
+  "old.reddit.com",
+  "reddit.com",
+]);
+let pairingCode = null;
+let pairingHelp = null;
 
 // Worker Window for background commenting
 let workerWindowId = null;
@@ -27,7 +59,381 @@ function setStatus(status, url) {
   connectionStatus = status;
   connectedUrl = url || null;
   console.log(`[RedditAgent] Status: ${status}${url ? ` (${url})` : ""}`);
-  chrome.runtime.sendMessage({ type: "status", status, url }).catch(() => {});
+  chrome.runtime
+    .sendMessage({
+      type: "status",
+      status,
+      url,
+      pairingCode,
+      pairingHelp,
+      protocol: activeProtocol,
+    })
+    .catch(() => {});
+}
+
+function toLowerAscii(input) {
+  return input.replace(/[A-Z]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) + 32),
+  );
+}
+
+function normalizeDeviceMetadata(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return toLowerAscii(trimmed);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function buildGatewayDeviceAuthPayload(params, version = "v3") {
+  const payload = [
+    version,
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    params.scopes.join(","),
+    String(params.signedAtMs),
+    params.token ?? "",
+  ];
+
+  if (version !== "v1") {
+    payload.push(params.nonce);
+  }
+
+  if (version === "v3") {
+    payload.push(
+      normalizeDeviceMetadata(params.platform),
+      normalizeDeviceMetadata(params.deviceFamily),
+    );
+  }
+
+  return payload.join("|");
+}
+
+function randomId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function findStringByKeys(obj, keys) {
+  if (!obj || typeof obj !== "object") return null;
+  const stack = [obj];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    for (const key of Object.keys(current)) {
+      const value = current[key];
+      if (keys.has(key) && typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+      if (value && typeof value === "object") {
+        stack.push(value);
+      }
+    }
+  }
+  return null;
+}
+
+function extractGatewayRequestId(message) {
+  return findStringByKeys(
+    message,
+    new Set(["requestId", "pairingRequestId", "pairRequestId"]),
+  );
+}
+
+function extractGatewayErrorMessage(message) {
+  const direct = findStringByKeys(message, new Set(["message", "error"]));
+  if (direct) return direct;
+  return "Gateway connect failed (unknown error)";
+}
+
+function extractGatewayPairingRequestId(payload) {
+  return findStringByKeys(
+    payload,
+    new Set(["requestId", "pairingRequestId", "pairRequestId"]),
+  );
+}
+
+function buildGatewayApproveHelp({ requestId = null, target = "devices", reason = null }) {
+  const baseCommand = target === "nodes" ? "openclaw nodes approve" : "openclaw devices approve";
+  const command = requestId ? `${baseCommand} ${requestId}` : baseCommand;
+  if (reason) return `Approve with: ${command} (${reason})`;
+  return `Approve with: ${command}`;
+}
+
+function resolveDeviceFamily() {
+  const isMobile = Boolean(navigator?.userAgentData?.mobile);
+  return isMobile ? "mobile" : "desktop";
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function getOrCreateBridgeDeviceIdentity() {
+  const stored = await chrome.storage.local.get([
+    BRIDGE_DEVICE_ID_STORAGE_KEY,
+    BRIDGE_AUTH_TOKEN_STORAGE_KEY,
+  ]);
+
+  let deviceId = stored[BRIDGE_DEVICE_ID_STORAGE_KEY];
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    await chrome.storage.local.set({ [BRIDGE_DEVICE_ID_STORAGE_KEY]: deviceId });
+  }
+
+  return {
+    deviceId,
+    authToken: stored[BRIDGE_AUTH_TOKEN_STORAGE_KEY] || undefined,
+  };
+}
+
+async function sendBridgeIdentify(socket) {
+  const { deviceId, authToken } = await getOrCreateBridgeDeviceIdentity();
+  if (socket.readyState !== WebSocket.OPEN) return;
+
+  const manifest = chrome.runtime.getManifest();
+  socket.send(
+    JSON.stringify({
+      type: "identify",
+      role: "extension",
+      deviceId,
+      authToken,
+      deviceName: `${manifest.name} (${chrome.runtime.id})`,
+    }),
+  );
+}
+
+async function getOrCreateGatewayDeviceIdentity() {
+  const stored = await chrome.storage.local.get([
+    GATEWAY_DEVICE_ID_STORAGE_KEY,
+    GATEWAY_PRIVATE_KEY_STORAGE_KEY,
+    GATEWAY_PUBLIC_KEY_STORAGE_KEY,
+  ]);
+
+  const storedDeviceId = stored[GATEWAY_DEVICE_ID_STORAGE_KEY];
+  const storedPrivateKey = stored[GATEWAY_PRIVATE_KEY_STORAGE_KEY];
+  const storedPublicKey = stored[GATEWAY_PUBLIC_KEY_STORAGE_KEY];
+
+  if (storedDeviceId && storedPrivateKey && storedPublicKey) {
+    try {
+      const publicKeyRaw = base64ToBytes(storedPublicKey);
+      const computedDeviceId = await sha256Hex(publicKeyRaw);
+      const privateKey = await crypto.subtle.importKey(
+        "pkcs8",
+        base64ToBytes(storedPrivateKey),
+        { name: "Ed25519" },
+        false,
+        ["sign"],
+      );
+
+      if (computedDeviceId !== storedDeviceId) {
+        await chrome.storage.local.set({
+          [GATEWAY_DEVICE_ID_STORAGE_KEY]: computedDeviceId,
+        });
+      }
+
+      return {
+        deviceId: computedDeviceId,
+        privateKey,
+        publicKeyRaw,
+      };
+    } catch (err) {
+      console.warn(
+        "[RedditAgent] Failed to load stored gateway identity, regenerating:",
+        err,
+      );
+      await chrome.storage.local.remove([
+        GATEWAY_DEVICE_ID_STORAGE_KEY,
+        GATEWAY_PRIVATE_KEY_STORAGE_KEY,
+        GATEWAY_PUBLIC_KEY_STORAGE_KEY,
+      ]);
+    }
+  }
+
+  const keyPair = await crypto.subtle.generateKey(
+    { name: "Ed25519" },
+    true,
+    ["sign", "verify"],
+  );
+  const publicKeyRaw = new Uint8Array(
+    await crypto.subtle.exportKey("raw", keyPair.publicKey),
+  );
+  const privateKeyPkcs8 = new Uint8Array(
+    await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
+  );
+  const deviceId = await sha256Hex(publicKeyRaw);
+
+  await chrome.storage.local.set({
+    [GATEWAY_DEVICE_ID_STORAGE_KEY]: deviceId,
+    [GATEWAY_PRIVATE_KEY_STORAGE_KEY]: bytesToBase64(privateKeyPkcs8),
+    [GATEWAY_PUBLIC_KEY_STORAGE_KEY]: bytesToBase64(publicKeyRaw),
+  });
+
+  return {
+    deviceId,
+    privateKey: keyPair.privateKey,
+    publicKeyRaw,
+  };
+}
+
+async function sendGatewayConnect(socket, nonce, version = "v2") {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  const identity = await getOrCreateGatewayDeviceIdentity();
+  const stored = await chrome.storage.local.get([
+    GATEWAY_AUTH_TOKEN_STORAGE_KEY,
+  ]);
+  const gatewayToken = stored[GATEWAY_AUTH_TOKEN_STORAGE_KEY] || undefined;
+  const authToken = gatewayToken || "";
+  const signedAtMs = Date.now();
+  const scopes = GATEWAY_SCOPES;
+  const clientId = GATEWAY_CLIENT_ID;
+  const clientMode = GATEWAY_CLIENT_MODE;
+  const platform = GATEWAY_CLIENT_PLATFORM;
+  const deviceFamily = resolveDeviceFamily();
+  const payload = buildGatewayDeviceAuthPayload(
+    {
+      deviceId: identity.deviceId,
+      clientId,
+      clientMode,
+      role: "operator",
+      scopes,
+      signedAtMs,
+      token: authToken,
+      nonce,
+      platform,
+      deviceFamily,
+    },
+    version,
+  );
+  const signatureBytes = new Uint8Array(
+    await crypto.subtle.sign(
+      "Ed25519",
+      identity.privateKey,
+      new TextEncoder().encode(payload),
+    ),
+  );
+  const requestId = randomId(`gateway-connect-${version}`);
+  pendingGatewayConnectId = requestId;
+  gatewayConnectVersion = version;
+
+  const auth = {};
+  if (gatewayToken) auth.token = gatewayToken;
+
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: requestId,
+      method: "connect",
+      params: {
+        minProtocol: GATEWAY_PROTOCOL_VERSION,
+        maxProtocol: GATEWAY_PROTOCOL_VERSION,
+        client: {
+          id: clientId,
+          version: GATEWAY_CLIENT_VERSION,
+          platform,
+          mode: clientMode,
+        },
+        role: "operator",
+        scopes,
+        auth: Object.keys(auth).length > 0 ? auth : {},
+        device: {
+          id: identity.deviceId,
+          publicKey: bytesToBase64Url(identity.publicKeyRaw),
+          signature: bytesToBase64Url(signatureBytes),
+          signedAt: signedAtMs,
+          nonce,
+        },
+      },
+    }),
+  );
+}
+
+function normalizeServerUrl(input) {
+  if (typeof input !== "string") return null;
+  const value = input.trim();
+  if (!value) return null;
+
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+
+  let parsed;
+  try {
+    parsed = hasScheme ? new URL(value) : new URL(`ws://${value}`);
+  } catch {
+    return null;
+  }
+  if (!parsed.hostname) return null;
+
+  // Normalize to bare host only. We synthesize protocol/port/path candidates later.
+  return parsed.hostname;
+}
+
+function unique(values) {
+  return [...new Set(values)];
+}
+
+function isLikelyLocalHost(hostname) {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1"
+  );
+}
+
+function getConnectionCandidates(normalizedServerUrl) {
+  let parsed;
+  try {
+    const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedServerUrl);
+    parsed = hasScheme
+      ? new URL(normalizedServerUrl)
+      : new URL(`ws://${normalizedServerUrl}`);
+  } catch {
+    return [];
+  }
+
+  const host = parsed.hostname.includes(":")
+    ? `[${parsed.hostname}]`
+    : parsed.hostname;
+
+  // Host field is normalized to bare host; build all connection candidates here.
+  // Order: bridge first (plugin flow), then gateway fallbacks.
+  return unique([
+    `ws://${host}:${DEFAULT_BRIDGE_PORT}/ws`,
+    `ws://${host}:${DEFAULT_BRIDGE_PORT}`,
+    `wss://${host}`,
+    `ws://${host}:${DEFAULT_GATEWAY_PORT}`,
+    `ws://${host}`,
+  ]);
 }
 
 // =============================================
@@ -64,12 +470,23 @@ function forceReconnect() {
     clearInterval(keepAliveIntervalId);
     keepAliveIntervalId = null;
   }
+  if (bridgeIdentifyTimer) {
+    clearTimeout(bridgeIdentifyTimer);
+    bridgeIdentifyTimer = null;
+  }
+  activeProtocol = null;
+  pendingGatewayConnectId = null;
+  pendingGatewayNonce = null;
+  gatewayConnectVersion = "v2";
+  gatewayLegacyFallbackTried = false;
   isConnecting = false;
   if (ws) {
     ws.onclose = null; // prevent onclose from scheduling another reconnect
     ws.close();
     ws = null;
   }
+  pairingCode = null;
+  pairingHelp = null;
   setStatus("disconnected");
   connectToServer();
 }
@@ -95,32 +512,202 @@ async function connectToServer() {
   }
 
   const { serverUrl } = await chrome.storage.local.get("serverUrl");
-  if (!serverUrl) {
+  const normalizedServerUrl = normalizeServerUrl(serverUrl);
+  if (!normalizedServerUrl) {
     console.log("[RedditAgent] No server URL configured");
+    pairingCode = null;
     setStatus("disconnected");
     isConnecting = false;
     return;
   }
+  if (normalizedServerUrl !== serverUrl) {
+    chrome.storage.local.set({ serverUrl: normalizedServerUrl });
+  }
 
-  console.log(`[RedditAgent] Connecting to ${serverUrl}...`);
-  try {
-    const socket = await tryWebSocket(serverUrl, 3000);
-    isConnecting = false;
-    setupSocket(socket, serverUrl);
-  } catch {
-    console.log(`[RedditAgent] Server not available`);
+  const candidates = getConnectionCandidates(normalizedServerUrl);
+  if (candidates.length === 0) {
+    console.log("[RedditAgent] Invalid server URL after normalization");
+    pairingCode = null;
+    pairingHelp = null;
     setStatus("disconnected");
     isConnecting = false;
     scheduleReconnect();
+    return;
   }
+
+  console.log(
+    `[RedditAgent] Connecting candidates: ${candidates.map((c) => `"${c}"`).join(", ")}`,
+  );
+
+  let socket = null;
+  let connectedCandidate = null;
+  for (const candidate of candidates) {
+    try {
+      socket = await tryWebSocket(candidate, 3000);
+      connectedCandidate = candidate;
+      break;
+    } catch (err) {
+      console.log(`[RedditAgent] Candidate failed: ${candidate}`, err);
+    }
+  }
+
+  if (socket && connectedCandidate) {
+    isConnecting = false;
+    setupSocket(socket, connectedCandidate);
+    return;
+  }
+
+  console.log("[RedditAgent] Server not available");
+  pairingCode = null;
+  pairingHelp = null;
+  setStatus("disconnected");
+  isConnecting = false;
+  scheduleReconnect();
+}
+
+function handleGatewayFrame(message, socket, url) {
+  if (message.type === "event" && message.event === "connect.challenge") {
+    const nonce =
+      typeof message?.payload?.nonce === "string" ? message.payload.nonce : "";
+    if (!nonce.trim()) {
+      pairingCode = null;
+      pairingHelp = "Gateway connect challenge was missing nonce.";
+      setStatus("disconnected", url);
+      socket.close(1008, "connect challenge missing nonce");
+      return true;
+    }
+    pendingGatewayNonce = nonce.trim();
+    gatewayLegacyFallbackTried = false;
+    const initialVersion = pendingGatewayNonce ? "v2" : "v1";
+    sendGatewayConnect(socket, pendingGatewayNonce, initialVersion).catch((err) => {
+      console.error("[RedditAgent] Failed to send gateway connect:", err);
+      pairingCode = null;
+      pairingHelp = "Failed to initialize gateway handshake.";
+      setStatus("disconnected", url);
+      socket.close(1008, "connect failed");
+    });
+    return true;
+  }
+
+  if (
+    message.type === "event" &&
+    (message.event === "device.pair.requested" ||
+      message.event === "node.pair.requested")
+  ) {
+    const requestId = extractGatewayPairingRequestId(message?.payload);
+    const target = message.event === "node.pair.requested" ? "nodes" : "devices";
+    pairingCode = typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
+    pairingHelp = buildGatewayApproveHelp({
+      requestId: pairingCode,
+      target,
+    });
+    setStatus("pairing", url);
+    return true;
+  }
+
+  if (
+    message.type === "res" &&
+    pendingGatewayConnectId &&
+    message.id === pendingGatewayConnectId
+  ) {
+    pendingGatewayConnectId = null;
+    if (message.ok) {
+      pendingGatewayNonce = null;
+      gatewayLegacyFallbackTried = false;
+      gatewayConnectVersion = "v2";
+      pairingCode = null;
+      pairingHelp = null;
+      setStatus("connected", url);
+      return true;
+    }
+
+    const requestId = extractGatewayRequestId(message);
+    const reason = findStringByKeys(message, new Set(["reason"]));
+    const errorMessage = extractGatewayErrorMessage(message);
+    const normalizedError = errorMessage.toLowerCase();
+
+    if (
+      !gatewayLegacyFallbackTried &&
+      (gatewayConnectVersion === "v2" || gatewayConnectVersion === "v3") &&
+      pendingGatewayNonce &&
+      normalizedError.includes("device signature invalid")
+    ) {
+      gatewayLegacyFallbackTried = true;
+      const retryVersion = gatewayConnectVersion === "v2" ? "v3" : "v2";
+      console.warn(
+        `[RedditAgent] Gateway rejected ${gatewayConnectVersion} signature; retrying connect with ${retryVersion} payload`,
+      );
+      sendGatewayConnect(socket, pendingGatewayNonce, retryVersion).catch((err) => {
+        console.error("[RedditAgent] Legacy gateway connect retry failed:", err);
+        pairingCode = null;
+        pairingHelp = "Failed to initialize gateway handshake.";
+        setStatus("disconnected", url);
+        socket.close(1008, "connect failed");
+      });
+      return true;
+    }
+
+    if (typeof requestId === "string" && requestId.trim().length > 0) {
+      pairingCode = requestId;
+      pairingHelp = buildGatewayApproveHelp({
+        requestId,
+        target: "devices",
+        reason: typeof reason === "string" && reason.trim().length > 0 ? reason : null,
+      });
+      setStatus("pairing", url);
+    } else {
+      pairingCode = null;
+      if (normalizedError.includes("pairing required")) {
+        pairingHelp = buildGatewayApproveHelp({ target: "devices" });
+        setStatus("pairing", url);
+      } else if (normalizedError.includes("unexpected property 'devicetoken'")) {
+        chrome.storage.local.remove(GATEWAY_DEVICE_TOKEN_STORAGE_KEY);
+        pairingHelp =
+          "Gateway rejected legacy device token auth field. Removed stale token and retrying with tokenless auth.";
+        setStatus("disconnected", url);
+      } else if (normalizedError.includes("origin not allowed")) {
+        pairingHelp =
+          "Gateway rejected extension origin. Add your extension origin to gateway.controlUi.allowedOrigins and retry.";
+        setStatus("disconnected", url);
+      } else {
+        pairingHelp = errorMessage;
+        setStatus("disconnected", url);
+      }
+    }
+    return true;
+  }
+
+  if (message.type === "event" && message.event === "tick") {
+    return true;
+  }
+
+  return false;
 }
 
 function setupSocket(socket, url) {
   ws = socket;
-  setStatus("connected", url);
+  activeProtocol = null;
+  pendingGatewayConnectId = null;
+  pendingGatewayNonce = null;
+  gatewayConnectVersion = "v2";
+  gatewayLegacyFallbackTried = false;
+  pairingCode = null;
+  pairingHelp = null;
+  setStatus("disconnected", url);
 
-  // Identify this connection as the extension (not a tool-handler)
-  ws.send(JSON.stringify({ type: "identify", role: "extension" }));
+  if (bridgeIdentifyTimer) {
+    clearTimeout(bridgeIdentifyTimer);
+  }
+  bridgeIdentifyTimer = setTimeout(() => {
+    if (ws !== socket || socket.readyState !== WebSocket.OPEN || activeProtocol) {
+      return;
+    }
+    activeProtocol = "bridge";
+    sendBridgeIdentify(socket).catch((err) => {
+      console.error("[RedditAgent] Failed to send bridge identify:", err);
+    });
+    startKeepAlive();
+  }, BRIDGE_IDENTIFY_DELAY_MS);
 
   ws.onmessage = async (event) => {
     let message;
@@ -133,7 +720,75 @@ function setupSocket(socket, url) {
       return;
     }
 
+    if (
+      message?.type === "event" &&
+      message?.event === "connect.challenge" &&
+      activeProtocol !== "bridge"
+    ) {
+      activeProtocol = "gateway";
+      if (bridgeIdentifyTimer) {
+        clearTimeout(bridgeIdentifyTimer);
+        bridgeIdentifyTimer = null;
+      }
+      if (keepAliveIntervalId) {
+        clearInterval(keepAliveIntervalId);
+        keepAliveIntervalId = null;
+      }
+    }
+
+    const isGatewayFrame =
+      message?.type === "event" ||
+      message?.type === "req" ||
+      message?.type === "res";
+
+    if ((activeProtocol === "gateway" || isGatewayFrame) && activeProtocol !== "bridge") {
+      activeProtocol = "gateway";
+      if (handleGatewayFrame(message, socket, url)) {
+        return;
+      }
+      return;
+    }
+
+    if (activeProtocol !== "bridge") {
+      activeProtocol = "bridge";
+      if (bridgeIdentifyTimer) {
+        clearTimeout(bridgeIdentifyTimer);
+        bridgeIdentifyTimer = null;
+      }
+      startKeepAlive();
+    }
+
     if (message.type === "pong") return;
+    if (message.type === "identified") {
+      pairingCode = null;
+      pairingHelp = null;
+      setStatus("connected", url);
+      return;
+    }
+    if (message.type === "pairing_required") {
+      pairingCode = typeof message.code === "string" ? message.code : null;
+      pairingHelp = "Approve this pairing code from OpenClaw.";
+      console.log(
+        `[RedditAgent] Pairing required with code: ${pairingCode || "unknown"}`,
+      );
+      setStatus("pairing", url);
+      return;
+    }
+    if (message.type === "pairing_approved") {
+      const authToken =
+        typeof message.authToken === "string" ? message.authToken : null;
+      if (authToken) {
+        await chrome.storage.local.set({ [BRIDGE_AUTH_TOKEN_STORAGE_KEY]: authToken });
+      }
+      pairingCode = null;
+      pairingHelp = null;
+      setStatus("connected", url);
+      return;
+    }
+    if (!message.action || !message.id) {
+      console.warn("[RedditAgent] Ignoring unknown bridge message:", message);
+      return;
+    }
 
     console.log(
       "[RedditAgent] Received:",
@@ -176,18 +831,50 @@ function setupSocket(socket, url) {
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     ws = null;
-    console.log(`[RedditAgent] Connection closed`);
-    setStatus("disconnected");
+    if (bridgeIdentifyTimer) {
+      clearTimeout(bridgeIdentifyTimer);
+      bridgeIdentifyTimer = null;
+    }
+    if (keepAliveIntervalId) {
+      clearInterval(keepAliveIntervalId);
+      keepAliveIntervalId = null;
+    }
+    pendingGatewayConnectId = null;
+    pendingGatewayNonce = null;
+    gatewayConnectVersion = "v2";
+    gatewayLegacyFallbackTried = false;
+
+    const closeReason = String(event?.reason || "").toLowerCase();
+    if (
+      activeProtocol === "gateway" &&
+      event?.code === 1008 &&
+      closeReason.includes("device token mismatch")
+    ) {
+      chrome.storage.local.remove(GATEWAY_DEVICE_TOKEN_STORAGE_KEY);
+    }
+
+    console.log(
+      `[RedditAgent] Connection closed (${event?.code || "?"} ${event?.reason || "no reason"})`,
+    );
+    if (closeReason.includes("pairing required") && connectionStatus !== "pairing") {
+      pairingCode = null;
+      pairingHelp = buildGatewayApproveHelp({ target: "devices" });
+      setStatus("pairing", connectedUrl || url);
+    } else if (connectionStatus !== "pairing") {
+      pairingCode = null;
+      pairingHelp = null;
+      setStatus("disconnected");
+    } else {
+      setStatus("pairing", connectedUrl || url);
+    }
     scheduleReconnect();
   };
 
   ws.onerror = () => {
     ws?.close();
   };
-
-  startKeepAlive();
 }
 
 function startKeepAlive() {
@@ -195,8 +882,12 @@ function startKeepAlive() {
   if (keepAliveIntervalId) {
     clearInterval(keepAliveIntervalId);
   }
+  if (activeProtocol !== "bridge") {
+    keepAliveIntervalId = null;
+    return;
+  }
   keepAliveIntervalId = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN && activeProtocol === "bridge") {
       ws.send(JSON.stringify({ type: "ping" }));
     } else {
       clearInterval(keepAliveIntervalId);
@@ -205,22 +896,65 @@ function startKeepAlive() {
   }, 20000);
 }
 
+function sendContentScriptMessage(tabId, type, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out waiting for content script response: ${type}`));
+    }, 8000);
+
+    chrome.tabs.sendMessage(
+      tabId,
+      { scope: "reddit-agent-reply", type, payload },
+      (response) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response) {
+          reject(new Error("No response from content script"));
+          return;
+        }
+        resolve(response);
+      },
+    );
+  });
+}
+
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "get_status") {
-    sendResponse({ status: connectionStatus, url: connectedUrl });
+    sendResponse({
+      status: connectionStatus,
+      url: connectedUrl,
+      pairingCode,
+      pairingHelp,
+      protocol: activeProtocol,
+    });
     return;
   }
   if (message.type === "set_server_url") {
-    const url = message.url?.trim();
-    if (!url) {
+    const rawInput = message.url?.trim();
+    if (!rawInput) {
       chrome.storage.local.remove("serverUrl");
-    } else {
-      chrome.storage.local.set({ serverUrl: url });
+      sendResponse({ ok: true, serverUrl: null });
+      return;
     }
+
+    const normalizedServerUrl = normalizeServerUrl(rawInput);
+    if (!normalizedServerUrl) {
+      sendResponse({
+        ok: false,
+        error: "Invalid server host. Use a host/IP or hostname.",
+      });
+      return;
+    }
+
+    chrome.storage.local.set({ serverUrl: normalizedServerUrl });
+
     // Force reconnect with new URL
     forceReconnect();
-    sendResponse({ ok: true });
+    sendResponse({ ok: true, serverUrl: normalizedServerUrl });
     return;
   }
   if (message.type === "retry") {
@@ -374,8 +1108,40 @@ function normalizeSubredditUrl(input) {
       normalized = `r/${normalized}`;
     }
     normalized = `https://www.reddit.com/${normalized}`;
+  } else {
+    validateRedditUrl(normalized);
   }
   return normalized.replace(/\/+$/, "");
+}
+
+function validateRedditUrl(input) {
+  let parsed;
+  try {
+    parsed = new URL(input);
+  } catch {
+    throw new Error("Invalid Reddit URL");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Reddit URL must use https");
+  }
+
+  if (!ALLOWED_REDDIT_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new Error("Only reddit.com URLs are allowed");
+  }
+
+  return parsed;
+}
+
+function normalizeCommentUrl(input) {
+  if (typeof input !== "string" || !input.trim()) {
+    throw new Error("Missing required parameter: commentUrl");
+  }
+  const parsed = validateRedditUrl(input.trim());
+  if (!/\/comments\//.test(parsed.pathname)) {
+    throw new Error("commentUrl must point to a Reddit comments URL");
+  }
+  return `${parsed.origin}${parsed.pathname}${parsed.search}`;
 }
 
 async function fetchRedditJSON(url, sort) {
@@ -638,27 +1404,25 @@ function isSubComment(url) {
 }
 
 async function replyToComment(commentUrl, replyText) {
-  if (!commentUrl) throw new Error("Missing required parameter: commentUrl");
   if (!replyText) throw new Error("Missing required parameter: replyText");
+  const normalizedCommentUrl = normalizeCommentUrl(commentUrl);
   const windowId = await getWorkerWindow();
   activePostCount++;
 
   try {
-    const tab = await createTabAndWaitForLoad(commentUrl, windowId);
+    const tab = await createTabAndWaitForLoad(normalizedCommentUrl, windowId);
 
     await sleep(3000);
 
-    if (isSubComment(commentUrl)) {
+    if (isSubComment(normalizedCommentUrl)) {
       // --- Sub-comment reply: click Reply button, then type in composer ---
       let clickSuccess = false;
       for (let attempt = 0; attempt < 3; attempt++) {
-        const clickResult = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: clickReplyButton,
-          args: [commentUrl],
+        const clickResult = await sendContentScriptMessage(tab.id, "click_reply_button", {
+          commentUrl: normalizedCommentUrl,
         });
 
-        if (clickResult[0].result?.success) {
+        if (clickResult?.success) {
           clickSuccess = true;
           break;
         }
@@ -678,12 +1442,9 @@ async function replyToComment(commentUrl, replyText) {
       for (let attempt = 0; attempt < 5; attempt++) {
         await sleep(2000);
 
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: typeAndSubmitReply,
-          args: [replyText],
+        typeResult = await sendContentScriptMessage(tab.id, "type_comment_reply", {
+          replyText,
         });
-        typeResult = results[0].result;
 
         if (typeResult?.success) {
           break;
@@ -702,11 +1463,10 @@ async function replyToComment(commentUrl, replyText) {
     } else {
       // --- Top-level post comment ---
       // Step 1: Click the composer to activate it (editor mounts on click)
-      const activateResults = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: activateTopLevelComposer,
-      });
-      const activateResult = activateResults[0].result;
+      const activateResult = await sendContentScriptMessage(
+        tab.id,
+        "activate_top_level_composer",
+      );
       console.log(
         "[RedditAgent] activateTopLevelComposer result:",
         JSON.stringify(activateResult),
@@ -717,12 +1477,9 @@ async function replyToComment(commentUrl, replyText) {
       for (let attempt = 0; attempt < 5; attempt++) {
         await sleep(2000);
 
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: typeTopLevelComment,
-          args: [replyText],
+        typeResult = await sendContentScriptMessage(tab.id, "type_top_level_comment", {
+          replyText,
         });
-        typeResult = results[0].result;
         console.log(
           `[RedditAgent] typeTopLevelComment attempt ${attempt + 1} result:`,
           JSON.stringify(typeResult),
@@ -749,11 +1506,7 @@ async function replyToComment(commentUrl, replyText) {
     await sleep(500);
     let submitSuccess = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const submitResult = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: submitComment,
-      });
-      const result = submitResult[0].result;
+      const result = await sendContentScriptMessage(tab.id, "submit_comment");
       console.log(
         `[RedditAgent] submitComment attempt ${attempt + 1} result:`,
         JSON.stringify(result),
@@ -784,12 +1537,13 @@ async function replyToComment(commentUrl, replyText) {
     for (let poll = 0; poll < 8; poll++) {
       await sleep(1500);
 
-      const verifyResults = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: verifyCommentPosted,
-        args: [replySubstring],
-      });
-      lastVerifyResult = verifyResults[0].result;
+      lastVerifyResult = await sendContentScriptMessage(
+        tab.id,
+        "verify_comment_posted",
+        {
+          replyTextSubstring: replySubstring,
+        },
+      );
 
       console.log(
         `[RedditAgent] Verify poll ${poll + 1}: ${lastVerifyResult?.status}`,
@@ -829,374 +1583,6 @@ async function replyToComment(commentUrl, replyText) {
       workerWindowPromise = null;
       chrome.windows.remove(toClose).catch(() => {});
     }
-  }
-}
-
-function activateTopLevelComposer() {
-  try {
-    const host = document.querySelector("comment-composer-host");
-    if (!host) {
-      return { success: false, error: "comment-composer-host not found" };
-    }
-
-    const input = host.querySelector("faceplate-textarea-input");
-    if (!input) {
-      return {
-        success: false,
-        error:
-          "faceplate-textarea-input not found inside comment-composer-host",
-      };
-    }
-
-    const label = input.shadowRoot?.querySelector("label");
-    if (!label) {
-      return {
-        success: false,
-        error: "label not found in faceplate-textarea-input shadow root",
-      };
-    }
-
-    // Simulate a full user click to activate the editor
-    label.dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true, composed: true }),
-    );
-    label.dispatchEvent(
-      new MouseEvent("mousedown", { bubbles: true, composed: true }),
-    );
-    label.focus();
-    label.dispatchEvent(
-      new PointerEvent("pointerup", { bubbles: true, composed: true }),
-    );
-    label.dispatchEvent(
-      new MouseEvent("mouseup", { bubbles: true, composed: true }),
-    );
-    label.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, composed: true }),
-    );
-    label.dispatchEvent(
-      new FocusEvent("focusin", { bubbles: true, composed: true }),
-    );
-
-    return {
-      success: true,
-      activated:
-        "comment-composer-host > faceplate-textarea-input > shadow > label",
-    };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-function clickReplyButton(commentUrl) {
-  try {
-    const urlObj = new URL(commentUrl);
-    const pathParts = urlObj.pathname.split("/").filter(Boolean);
-    const commentId = pathParts[pathParts.length - 1];
-
-    const actionRows = document.querySelectorAll("shreddit-comment-action-row");
-
-    let targetRow = null;
-    for (const row of actionRows) {
-      const permalink = row.getAttribute("permalink") || "";
-      if (permalink.includes(commentId)) {
-        targetRow = row;
-        break;
-      }
-    }
-
-    if (!targetRow) {
-      const firstRow = document.querySelector("shreddit-comment-action-row");
-      if (!firstRow) {
-        return { success: false, error: "No comment action row found on page" };
-      }
-      targetRow = firstRow;
-    }
-
-    const roots = [targetRow.shadowRoot, targetRow].filter(Boolean);
-
-    for (const root of roots) {
-      const replyBtn =
-        root.querySelector('button[data-testid="comment-reply-button"]') ||
-        root.querySelector('button[aria-label="Reply"]');
-
-      if (replyBtn) {
-        replyBtn.click();
-        return { success: true };
-      }
-
-      const allButtons = root.querySelectorAll("button");
-      for (const btn of allButtons) {
-        if (btn.textContent?.trim().toLowerCase() === "reply") {
-          btn.click();
-          return { success: true };
-        }
-      }
-    }
-
-    return { success: false, error: "Reply button not found" };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-function submitComment() {
-  try {
-    // Deep shadow DOM traversal
-    function deepQuerySelectorAll(root, selector) {
-      const results = [...root.querySelectorAll(selector)];
-      const allElements = root.querySelectorAll("*");
-      for (const el of allElements) {
-        if (el.shadowRoot) {
-          results.push(...deepQuerySelectorAll(el.shadowRoot, selector));
-        }
-      }
-      return results;
-    }
-
-    // Strategy 1: Find button by type="submit" (most specific)
-    const allButtons = deepQuerySelectorAll(document, "button");
-    let submitBtn = allButtons.find(
-      (btn) => btn.type === "submit" && btn.getBoundingClientRect().width > 0,
-    );
-
-    // Strategy 2: Find visible button with text "Comment" or "Reply"
-    if (!submitBtn) {
-      const submitTexts = ["comment", "reply"];
-      submitBtn = allButtons.find((btn) => {
-        const text = btn.textContent?.trim().toLowerCase();
-        return (
-          btn.getBoundingClientRect().width > 0 && submitTexts.includes(text)
-        );
-      });
-    }
-
-    // Strategy 3: Search inside comment-composer-host specifically
-    if (!submitBtn) {
-      const hosts = deepQuerySelectorAll(document, "comment-composer-host");
-      for (const host of hosts) {
-        const hostButtons = deepQuerySelectorAll(host, "button");
-        const candidate = hostButtons.find((btn) => {
-          const text = btn.textContent?.trim().toLowerCase();
-          return (
-            btn.getBoundingClientRect().width > 0 &&
-            (btn.type === "submit" || text === "comment" || text === "reply")
-          );
-        });
-        if (candidate) {
-          submitBtn = candidate;
-          break;
-        }
-      }
-    }
-
-    if (!submitBtn) {
-      // Collect diagnostic info for debugging
-      const visibleButtons = allButtons.filter(
-        (b) => b.getBoundingClientRect().width > 0,
-      );
-      const buttonTexts = visibleButtons
-        .map(
-          (b) => `"${b.textContent?.trim().substring(0, 30)}" type=${b.type}`,
-        )
-        .join(", ");
-
-      console.error(
-        "[RedditAgent:page] submitComment: no submit button found.",
-        `${visibleButtons.length} visible buttons: [${buttonTexts}]`,
-      );
-      return {
-        success: false,
-        error: `No Comment or Reply button found. ${visibleButtons.length} visible buttons: [${buttonTexts}]`,
-      };
-    }
-
-    console.log(
-      "[RedditAgent:page] submitComment: clicking button:",
-      submitBtn.textContent?.trim(),
-      "type=" + submitBtn.type,
-    );
-    submitBtn.click();
-    return {
-      success: true,
-      method: "submit-button",
-      buttonText: submitBtn.textContent?.trim(),
-    };
-  } catch (err) {
-    console.error(
-      "[RedditAgent:page] submitComment error:",
-      err.message,
-      err.stack,
-    );
-    return { success: false, error: err.message };
-  }
-}
-
-function verifyCommentPosted(replyTextSubstring) {
-  try {
-    // Deep shadow DOM traversal
-    function deepQuerySelectorAll(root, selector) {
-      const results = [...root.querySelectorAll(selector)];
-      const allElements = root.querySelectorAll("*");
-      for (const el of allElements) {
-        if (el.shadowRoot) {
-          results.push(...deepQuerySelectorAll(el.shadowRoot, selector));
-        }
-      }
-      return results;
-    }
-
-    // Signal 1: Check for error toasts (fast-exit on failure)
-    const toasts = [
-      ...deepQuerySelectorAll(document, '[role="alert"]'),
-      ...deepQuerySelectorAll(document, "faceplate-toast"),
-    ];
-    const errorToast = toasts.find((el) => {
-      const text = el.textContent?.toLowerCase() || "";
-      return (
-        text.includes("error") ||
-        text.includes("wrong") ||
-        text.includes("too much") ||
-        text.includes("try again") ||
-        text.includes("failed")
-      );
-    });
-
-    if (errorToast) {
-      return {
-        status: "error",
-        error: `Reddit error: ${errorToast.textContent?.trim().substring(0, 200)}`,
-      };
-    }
-
-    // Signal 2: Check if composer textarea has been cleared or removed
-    const textareas = deepQuerySelectorAll(document, "textarea");
-    const activeTextarea = textareas.find(
-      (ta) =>
-        ta.getBoundingClientRect().width > 0 &&
-        ta.getBoundingClientRect().height > 0,
-    );
-    const composerCleared =
-      !activeTextarea || activeTextarea.value?.trim() === "";
-
-    // Signal 3: Check if our reply text appears in the comment thread
-    const allComments = deepQuerySelectorAll(document, "shreddit-comment");
-    let foundOurComment = false;
-    for (const comment of allComments) {
-      const commentText = comment.textContent || "";
-      if (commentText.includes(replyTextSubstring)) {
-        foundOurComment = true;
-        break;
-      }
-    }
-
-    if (foundOurComment) {
-      return { status: "confirmed", signal: "comment_found_in_thread" };
-    }
-
-    if (composerCleared) {
-      return { status: "likely_success", signal: "composer_cleared" };
-    }
-
-    return {
-      status: "pending",
-      composerCleared,
-      foundOurComment,
-      activeTextareaValue: activeTextarea?.value?.substring(0, 50) || null,
-    };
-  } catch (err) {
-    return { status: "error", error: err.message };
-  }
-}
-
-function typeTopLevelComment(replyText) {
-  try {
-    const host = document.querySelector("comment-composer-host");
-    if (!host) {
-      return { success: false, error: "comment-composer-host not found" };
-    }
-
-    const input = host.querySelector("faceplate-textarea-input");
-    if (!input) {
-      return { success: false, error: "faceplate-textarea-input not found" };
-    }
-
-    // After activation, the textarea should be inside the shadow root
-    const textarea = input.shadowRoot?.querySelector("textarea");
-    if (!textarea) {
-      return {
-        success: false,
-        error:
-          "textarea not found in faceplate-textarea-input shadow root (editor may not be activated yet)",
-      };
-    }
-
-    textarea.focus();
-
-    // Clear any existing text, then use execCommand to insert — this triggers framework listeners
-    textarea.select();
-    document.execCommand("selectAll", false, null);
-    document.execCommand("insertText", false, replyText);
-
-    console.log(
-      "[RedditAgent:page] typeTopLevelComment: textarea.value =",
-      JSON.stringify(textarea.value?.substring(0, 80)),
-    );
-    return {
-      success: true,
-      message: "Text entered",
-      valueLength: textarea.value?.length,
-    };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-function typeAndSubmitReply(replyText) {
-  try {
-    // Deep shadow DOM traversal — searches through ALL nested shadow roots
-    function deepQuerySelectorAll(root, selector) {
-      const results = [...root.querySelectorAll(selector)];
-      const allElements = root.querySelectorAll("*");
-      for (const el of allElements) {
-        if (el.shadowRoot) {
-          results.push(...deepQuerySelectorAll(el.shadowRoot, selector));
-        }
-      }
-      return results;
-    }
-
-    // 1. Find faceplate-textarea-input — it IS the text input field
-    const allInputs = deepQuerySelectorAll(
-      document,
-      "faceplate-textarea-input",
-    );
-    const inputField = allInputs.find((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
-
-    if (!inputField) {
-      return {
-        success: false,
-        error: `Input field not found. faceplate-textarea-input count: ${allInputs.length}`,
-      };
-    }
-
-    inputField.focus();
-    inputField.click();
-
-    if (typeof inputField.value !== "undefined") {
-      inputField.value = replyText;
-      inputField.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    document.execCommand("insertText", false, replyText);
-
-    return {
-      success: true,
-      message: `Text entered into <${inputField.tagName}>`,
-    };
-  } catch (err) {
-    return { success: false, error: err.message };
   }
 }
 

@@ -17,10 +17,7 @@ Then enable it in your OpenClaw configuration:
   plugins: {
     entries: {
       "openclaw-reddit-agent-server": {
-        enabled: true,
-        config: {
-          port: 7071, // optional, default is 7071
-        },
+        enabled: true
       },
     },
   },
@@ -28,13 +25,23 @@ Then enable it in your OpenClaw configuration:
 ```
 
 The plugin starts the WebSocket bridge server automatically. No need to run a separate server process.
+By default it binds for remote access (`0.0.0.0`) with a private-network policy (loopback + RFC1918 + Tailscale ranges), so a separate host override is usually not required.
 
 ## Chrome Extension Setup
 
 1. Build the extension: `npm run build` in `packages/extension`
 2. Load `dist/` in Chrome at `chrome://extensions/` (Developer mode → Load unpacked)
-3. Click the extension icon and set the server URL to `ws://localhost:7071/ws`
-4. The extension will auto-connect when OpenClaw starts
+3. Click the extension icon and enter a host or full WebSocket URL.
+4. The input is normalized to bare host only (protocol/port/path are stripped), then candidates are generated automatically:
+   - `ws://<host>:7071/ws`
+   - `ws://<host>:7071`
+   - `wss://<host>`
+   - `ws://<host>:18789`
+   - `ws://<host>`
+5. Pairing flow depends on target:
+   - Bridge pairing: extension shows a pairing **code**; approve with `reddit_approve_pairing`
+   - Gateway pairing: extension shows a pairing **request ID**; approve with `openclaw devices approve <requestId>`
+6. After approval, the extension stores bridge auth state and reconnects automatically
 
 ## Capabilities
 
@@ -47,7 +54,9 @@ The plugin starts the WebSocket bridge server automatically. No need to run a se
 
 ## Connection
 
-The Chrome extension connects via WebSocket at `ws://<host>:7071/ws`. All communication is JSON over that socket.
+The Chrome extension accepts host input and maps `http://`/`https://` to `ws://`/`wss://`.
+- Any entered value is normalized to host-only in the popup field.
+- Protocol, port, and path are synthesized by the extension at connect-time using the candidate list above.
 
 ## Protocol
 
@@ -260,10 +269,10 @@ Searches Reddit via `/search.json?q=...`. Optionally scope the search to a speci
 
 Fetches posts submitted by a Reddit user. Uses the `/user/<username>/submitted.json` endpoint.
 
-| Param      | Type   | Required | Description                                                                                                      |
-| ---------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| `username` | string | yes      | Reddit username (e.g. `"richo-s"`). Do not include `u/` or `/u/` prefix.                                         |
-| `sort`     | string | no       | `hot` \| `new` \| `top` \| `controversial` (default: `hot`)                                                      |
+| Param      | Type   | Required | Description                                                                                                        |
+| ---------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `username` | string | yes      | Reddit username (e.g. `"richo-s"`). Do not include `u/` or `/u/` prefix.                                           |
+| `sort`     | string | no       | `hot` \| `new` \| `top` \| `controversial` (default: `hot`)                                                        |
 | `time`     | string | no       | `hour` \| `day` \| `week` \| `month` \| `year` (default: all time). Applies when sort is `top` or `controversial`. |
 
 ```json

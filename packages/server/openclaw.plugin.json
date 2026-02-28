@@ -6,19 +6,46 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "port": {
+      "host": {
+        "type": "string",
+        "default": "0.0.0.0"
+      },
+      "networkPolicy": {
+        "type": "string",
+        "enum": ["loopback", "private", "any"],
+        "default": "private"
+      },
+      "pairingCodeTtlSeconds": {
         "type": "integer",
-        "minimum": 1,
-        "maximum": 65535,
-        "default": 7071
+        "minimum": 30,
+        "maximum": 86400,
+        "default": 600
+      },
+      "pairingStorePath": {
+        "type": "string"
       }
     }
   },
   "uiHints": {
-    "port": {
-      "label": "WebSocket Port",
-      "placeholder": "7071",
-      "help": "Port for the WebSocket bridge server. The Chrome extension connects here."
+    "host": {
+      "label": "Bind Host",
+      "placeholder": "0.0.0.0",
+      "help": "Network interface to bind the WebSocket bridge to. Default 0.0.0.0 allows remote extension connections (for example over Tailscale)."
+    },
+    "networkPolicy": {
+      "label": "Client Network Policy",
+      "placeholder": "private",
+      "help": "Allowed client source networks: loopback (same machine only), private (loopback + RFC1918 + Tailscale ranges), any (no source-network restriction)."
+    },
+    "pairingCodeTtlSeconds": {
+      "label": "Pairing Code TTL (seconds)",
+      "placeholder": "600",
+      "help": "How long a pairing code remains valid before expiring."
+    },
+    "pairingStorePath": {
+      "label": "Pairing Store Path",
+      "placeholder": "~/.openclaw/reddit-agent-pairings.json",
+      "help": "Optional file path for persisted approved devices and auth tokens."
     }
   },
   "skills": ["skills/openclaw-reddit-agent-server"]

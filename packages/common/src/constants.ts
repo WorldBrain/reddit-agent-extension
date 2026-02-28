@@ -2,9 +2,14 @@
 const isDev = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.DEV) || 
               (typeof process !== "undefined" && process.env.NODE_ENV === "development");
 
-export const WEBSITE_URL = isDev
+// Prefer an explicit env var so all packages can share the same website base URL.
+const websiteUrlFromEnv =
+  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_WEBSITE_URL) ||
+  (typeof process !== "undefined" && (process.env.VITE_WEBSITE_URL || process.env.WEBSITE_URL));
+
+export const WEBSITE_URL = websiteUrlFromEnv || (isDev
   ? "http://localhost:7259"
-  : "https://redditagent.com";
+  : "https://redditclaw.com");
 
 export const LEMONSQUEEZY_API_BASE =
   "https://api.lemonsqueezy.com/v1/licenses";

@@ -34,6 +34,18 @@ npm install
 npm run build    # Build extension to dist/
 ```
 
+Optional: configure a shared website base URL for all packages:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```bash
+VITE_WEBSITE_URL=https://redditclaw.com
+```
+
 Load `dist/` in Chrome: `chrome://extensions/` → Developer mode → Load unpacked
 
 For development with auto-rebuild: `npm run dev`
@@ -46,7 +58,8 @@ The bridge server connects the Chrome extension (via WebSocket) to HTTP API endp
 npm run server    # Starts on http://localhost:7071
 ```
 
-The extension auto-connects to `ws://localhost:7071/ws` when the server is running.
+In the extension popup, enter your bridge host (Tailscale IP/name or `localhost` for same-machine setups). The extension normalizes host-only input to `ws://<host>:7071/ws` automatically, and also accepts full `ws://...` / `wss://...` URLs.
+On first connection, approve the pairing code from OpenClaw with `reddit_approve_pairing`.
 
 ## HTTP API
 

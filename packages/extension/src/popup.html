@@ -49,14 +49,27 @@
         padding: 6px 12px;
         font-size: 11px;
         font-weight: 500;
-        color: #111827;
-        background: #ffffff;
+        color: #6b7280;
+        background: #f3f4f6;
         border: 1px solid #e5e7eb;
-        border-bottom: 1px solid #ffffff;
+        border-bottom: 1px solid #e5e7eb;
         border-radius: 6px 6px 0 0;
         position: relative;
         bottom: -1px;
         font-family: "Inter", sans-serif;
+        cursor: pointer;
+      }
+      .tab.active {
+        color: #111827;
+        background: #ffffff;
+        border-bottom: 1px solid #ffffff;
+      }
+
+      .tab-panel {
+        display: none;
+      }
+      .tab-panel.active {
+        display: block;
       }
 
       .popup-body {
@@ -98,6 +111,15 @@
       .status-panel.disconnected .dot {
         background: #d1d5db;
       }
+      .status-panel.pairing {
+        border-color: #f59e0b;
+        background: rgba(245, 158, 11, 0.08);
+        color: #b45309;
+      }
+      .status-panel.pairing .dot {
+        background: #f59e0b;
+        box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+      }
 
       .connected-url {
         font-family: "JetBrains Mono", monospace;
@@ -115,7 +137,7 @@
       .section label {
         display: block;
         font-family: "JetBrains Mono", monospace;
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -125,7 +147,7 @@
       .section .hint {
         font-family: "JetBrains Mono", monospace;
         font-size: 10px;
-        color: #d1d5db;
+        color: #9ca3af;
         margin-top: 4px;
       }
 
@@ -223,15 +245,38 @@
       }
 
       /* License status */
-      #license-status.valid {
-        color: #06B6D4;
+      #license-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
       }
-      #license-status.invalid {
-        color: #ef4444;
+      #license-status .license-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
       }
+      #license-status.active {
+        color: #10b981;
+      }
+      #license-status.active .license-status-dot {
+        background: #10b981;
+      }
+      #license-status.inactive,
       #license-status.checking {
         color: #9ca3af;
       }
+      #license-status.inactive .license-status-dot,
+      #license-status.checking .license-status-dot {
+        background: #d1d5db;
+      }
+      #license-status.error {
+        color: #ef4444;
+      }
+      #license-status.error .license-status-dot {
+        background: #ef4444;
+      }
+
 
       /* Help button */
       .help-btn {
@@ -289,61 +334,63 @@
         <span class="yellow"></span>
         <span class="green"></span>
       </div>
-      <div class="tab">reddit_claw</div>
+      <div class="tab active" data-tab="pairing">Pairing</div>
+      <div class="tab" data-tab="license">License</div>
     </div>
 
     <div class="popup-body">
-      <div class="header">
-        <h1>
-          <img class="logo" src="./logo.svg" alt="" />
-          reddit_claw
-        </h1>
-        <button id="btn-help" class="help-btn" title="Setup guide">?</button>
-      </div>
+      <div id="pairing-panel" class="tab-panel active">
+        <div class="header">
+          <h1>
+            <img class="logo" src="./logo.svg" alt="" />
+            reddit_claw
+          </h1>
+          <button id="btn-help" class="help-btn" title="Setup guide">?</button>
+        </div>
+        <div id="status" class="status-panel disconnected">
+          <span class="dot"></span>
+          <span id="status-text">Disconnected</span>
+        </div>
+        <div id="connected-url" class="connected-url"></div>
+        <div id="pairing-info" class="hint" style="display: none"></div>
 
-      <div id="status" class="status-panel disconnected">
-        <span class="dot"></span>
-        <span id="status-text">Disconnected</span>
-      </div>
-      <div id="connected-url" class="connected-url"></div>
-
-      <div class="section">
-        <label>WebSocket Server URL</label>
+        <div class="section">
+          <label>Gateway / Bridge Host</label>
         <div id="pair-input" class="input-row">
-          <input
-            id="server-url"
-            type="text"
-            placeholder="ws://192.168.1.10:7071/ws"
-          />
-          <button id="btn-pair" class="primary">Save</button>
+            <input
+              id="server-url"
+              type="text"
+              placeholder="my-node.tailnet.ts.net or ws://host:port"
+            />
+            <button id="btn-pair" class="primary">Save</button>
+          </div>
+          <div id="pair-display" class="paired-host" style="display: none">
+            <span id="paired-host-text"></span>
+            <button id="btn-unpair" class="danger">remove</button>
+          </div>
         </div>
-        <div id="pair-display" class="paired-host" style="display: none">
-          <span id="paired-host-text"></span>
-          <button id="btn-unpair" class="danger">remove</button>
-        </div>
-        <div class="hint">Full WebSocket URL of the agent server</div>
+
+        <button id="btn-retry" class="secondary">Retry Connection</button>
       </div>
 
-      <div class="section" id="license-section">
-        <label>License Key</label>
-        <div id="license-input" class="input-row">
-          <input
-            id="license-key"
-            type="text"
-            placeholder="Enter your license key"
-          />
-          <button id="btn-save-license" class="primary">Save</button>
+      <div id="license-panel" class="tab-panel">
+        <div class="section" id="license-section">
+          <label>License Key</label>
+          <div id="license-input" class="input-row">
+            <input
+              id="license-key"
+              type="text"
+              placeholder="Enter your license key"
+            />
+            <button id="btn-save-license" class="primary">Save</button>
+          </div>
+          <div id="license-display" class="paired-host" style="display: none">
+            <span id="license-key-text"></span>
+            <button id="btn-remove-license" class="danger">remove</button>
+          </div>
+          <div id="license-status" class="hint"></div>
         </div>
-        <div id="license-display" class="paired-host" style="display: none">
-          <span id="license-key-text"></span>
-          <button id="btn-remove-license" class="danger">remove</button>
-        </div>
-        <div id="license-status" class="hint"></div>
       </div>
-
-      <div class="divider"></div>
-
-      <button id="btn-retry" class="secondary">Retry Connection</button>
     </div>
 
     <script type="module" src="popup.js"></script>

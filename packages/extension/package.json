@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "vite build",
-    "package": "vite build && zip -r ../../extension.zip dist",
+    "package": "vite build && rm -f ../../extension.zip && (cd dist && zip -r ../../extension.zip .)",
     "watch": "vite build --watch --mode development"
   },
   "devDependencies": {

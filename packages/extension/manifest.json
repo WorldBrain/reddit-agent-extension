@@ -1,25 +1,39 @@
 {
   "manifest_version": 3,
   "name": "Reddit Agent Extension",
-  "version": "1.0.0",
+  "version": "2026.2.24",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqfezW2/5LucnLR9/ikslb47uZZmuQ6rOMyfdQc188K9tfUVUPZmcEXskEjBbK+rZyWqDLMSdQ0bhzfBiUQKwl10P3EeyiENGWFDs/4oJr/a44o3wyiHTNuVVXk8qD5XK6BoOGbCvmda4DbX/v1MBkNJBKBrGeZ4MDc2DbX+gzap5O6bbICOcW/Vo7q8C3Y/5TiRZDfhek4ubcLr/JRbK3voCqth/ACtVNTplxfPMW4+cqorkcvLPKY9WTt+OOvvbcXwNcc8Tike9T5UTVg9gbn6Sp0MomyP/iIe/YxQOsk0tpokAHXyybXPTTkMSfL09fpSHOztYRJujyVjXpuzKjwIDAQAB",
   "description": "Connects Reddit browsing and replies to your local AI agent through a secure WebSocket bridge.",
   "minimum_chrome_version": "116",
-  "permissions": [
-    "scripting",
-    "tabs",
-    "activeTab",
-    "storage"
-  ],
+  "permissions": ["tabs", "storage"],
   "host_permissions": [
+    "ws://*/*",
+    "wss://*/*",
     "https://www.reddit.com/*",
     "https://old.reddit.com/*",
     "https://api.lemonsqueezy.com/*"
   ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.reddit.com/*", "https://old.reddit.com/*"],
+      "js": ["src/content/reddit-reply.js"]
+    }
+  ],
   "background": {
     "service_worker": "src/background.js"
   },
+  "icons": {
+    "16": "src/icons/icon16.png",
+    "32": "src/icons/icon32.png",
+    "48": "src/icons/icon48.png",
+    "128": "src/icons/icon128.png"
+  },
   "action": {
     "default_popup": "src/popup.html",
-    "default_title": "Reddit Agent"
+    "default_title": "Reddit Agent",
+    "default_icon": {
+      "16": "src/icons/icon16.png",
+      "32": "src/icons/icon32.png"
+    }
   }
 }

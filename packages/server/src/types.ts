@@ -25,6 +25,9 @@ export type BridgeResponse = BridgeSuccessResponse | BridgeErrorResponse;
 export interface IdentifyMessage {
   type: "identify";
   role: "extension";
+  deviceId: string;
+  deviceName?: string;
+  authToken?: string;
 }
 
 /** Ping message from extension */
@@ -33,6 +36,21 @@ export interface PingMessage {
 }
 
 export type ExtensionMessage = IdentifyMessage | PingMessage | BridgeResponse;
+
+export interface PendingPairing {
+  code: string;
+  deviceId: string;
+  deviceName: string;
+  requestedAt: string;
+  expiresAt: string;
+}
+
+export interface PairedDevice {
+  deviceId: string;
+  deviceName: string;
+  approvedAt: string;
+  lastSeenAt: string;
+}
 
 export interface PendingRequest {
   resolve: (data: unknown) => void;

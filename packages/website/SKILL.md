@@ -31,19 +31,22 @@ openclaw plugins install openclaw-reddit-agent-server
 
 2. **Ensure the bridge server is running.** Use the `openclaw-reddit-agent-server` tool to start or verify the WebSocket bridge server is active.
 
-3. **Provide the connection URL to the user.** After the bridge is running on first install, tell the user the WebSocket URL they need to enter into the Chrome extension's settings. This is the server's WebSocket endpoint — typically a Tailscale or local URL in the form `ws://<host>:7071/ws`. Always provide this URL proactively during setup, and whenever the user asks for it.
+3. **Provide the connection host to the user.** After the bridge is running on first install, tell the user the host they should enter into the Chrome extension (typically a Tailscale IP/name, or `localhost` for same-machine setups). The extension normalizes host-only input to `ws://<host>:7071/ws` automatically, and also accepts full `ws://...` / `wss://...` URLs. Always provide this proactively during setup, and whenever the user asks for it.
 
-4. **Discover available actions.** Before executing any request, call the `get_skill` action on the extension to retrieve the up-to-date API reference. This returns the full list of endpoints, parameters, and response shapes directly from the extension.
+4. **Approve first-time pairing.** New extension devices must be explicitly approved: read pending requests with `reddit_list_pairing_requests`, approve a code with `reddit_approve_pairing`, and optionally audit with `reddit_list_paired_devices`.
 
-```json
-{ "id": "0", "action": "get_skill", "params": {} }
-```
+5. **Discover available actions first.** Call `reddit_extension_get_schema` to retrieve the extension's live API schema markdown (`get_skill` under the hood). This is the source of truth for supported actions and parameter shapes.
 
-The response contains a markdown document describing every available action, accepted parameters, and example payloads. Always consult this document before making requests — it is the single source of truth for the extension's capabilities and may have changed since this skill was written.
+6. **Execute through the thin bridge adapter.** Call `reddit_extension_call` with:
+   - `action`: extension action name from schema
+   - `params`: action-specific object
+   - `timeoutMs` (optional): custom timeout for slower actions
+
+Always read schema first, then choose the minimal matching action(s) for the user's request.
 
 ## Connection
 
-The Chrome extension connects via WebSocket at `ws://<host>:7071/ws`. All communication is JSON over that socket.
+The Chrome extension accepts host input and connects via normalized WebSocket URL `ws://<host>:7071/ws` (fixed port `7071`, `/ws` appended automatically). It also accepts full `ws://...` and `wss://...` URLs. First-time devices require pairing approval. All communication is JSON over that socket.
 
 ## Protocol
 
