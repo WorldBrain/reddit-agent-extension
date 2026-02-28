@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Reddit Agent Extension",
-  "version": "2026.2.24",
+  "version": "2026.2.28",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqfezW2/5LucnLR9/ikslb47uZZmuQ6rOMyfdQc188K9tfUVUPZmcEXskEjBbK+rZyWqDLMSdQ0bhzfBiUQKwl10P3EeyiENGWFDs/4oJr/a44o3wyiHTNuVVXk8qD5XK6BoOGbCvmda4DbX/v1MBkNJBKBrGeZ4MDc2DbX+gzap5O6bbICOcW/Vo7q8C3Y/5TiRZDfhek4ubcLr/JRbK3voCqth/ACtVNTplxfPMW4+cqorkcvLPKY9WTt+OOvvbcXwNcc8Tike9T5UTVg9gbn6Sp0MomyP/iIe/YxQOsk0tpokAHXyybXPTTkMSfL09fpSHOztYRJujyVjXpuzKjwIDAQAB",
   "description": "Connects Reddit browsing and replies to your local AI agent through a secure WebSocket bridge.",
   "minimum_chrome_version": "116",
